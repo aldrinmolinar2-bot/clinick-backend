@@ -37,6 +37,7 @@ const reportSchema = new mongoose.Schema(
     incident: String,
     severity: String,
     symptoms: String,
+    seen: { type: Boolean, default: false }, // 👈 track if dashboard has acknowledged it
   },
   { timestamps: true }
 );
@@ -49,7 +50,7 @@ app.get("/", (_req, res) => {
   res.send("Clinick API is running...");
 });
 
-// Submit report (📌 without email now)
+// Submit report
 app.post("/report", async (req, res) => {
   try {
     const report = new Report({
@@ -70,16 +71,29 @@ app.post("/report", async (req, res) => {
   }
 });
 
-// Get reports (with optional ?since filter)
+// Get reports
 app.get("/reports", async (req, res) => {
   try {
-    const since = req.query.since ? new Date(req.query.since) : null;
-    const filter = since ? { createdAt: { $gt: since } } : {};
-    const reports = await Report.find(filter).sort({ createdAt: -1 });
+    const reports = await Report.find().sort({ createdAt: -1 });
     res.json(reports);
   } catch (err) {
     console.error("Fetch reports error:", err);
     res.status(500).json({ ok: false, error: "Failed to load reports" });
+  }
+});
+
+// Mark a report as seen
+app.put("/reports/:id/seen", async (req, res) => {
+  try {
+    const report = await Report.findByIdAndUpdate(
+      req.params.id,
+      { seen: true },
+      { new: true }
+    );
+    res.json(report);
+  } catch (err) {
+    console.error("Error marking report as seen:", err);
+    res.status(500).json({ ok: false, error: "Failed to update report" });
   }
 });
 

@@ -2,7 +2,6 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const nodemailer = require("nodemailer");
 
 const app = express();
 
@@ -14,7 +13,7 @@ app.use(
       "https://clinick-frontend.vercel.app", // ✅ Vercel frontend
     ],
     methods: ["GET", "POST", "PUT", "DELETE"], // Allow needed HTTP methods
-    credentials: true, // Allow cookies/headers if ever needed
+    credentials: true,
   })
 );
 
@@ -44,22 +43,13 @@ const reportSchema = new mongoose.Schema(
 
 const Report = mongoose.model("Report", reportSchema);
 
-// --- Nodemailer Transporter ---
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
-
 // --- Routes ---
 // Health check
 app.get("/", (_req, res) => {
   res.send("Clinick API is running...");
 });
 
-// 🔓 Public: Submit report
+// Submit report (📌 without email now)
 app.post("/report", async (req, res) => {
   try {
     const report = new Report({
@@ -70,34 +60,17 @@ app.post("/report", async (req, res) => {
       severity: req.body.severity,
       symptoms: req.body.symptoms,
     });
+
     await report.save();
-
-    // Send email alert
-    await transporter.sendMail({
-      from: process.env.SMTP_USER,
-      to: process.env.SMTP_TO,
-      subject: `🚨 Emergency Report: ${report.incident} (${report.severity})`,
-      text: `New emergency report received:
-
-Patient: ${report.patientName}
-Role: ${report.role}
-Location: ${report.location}
-Incident: ${report.incident}
-Severity: ${report.severity}
-Symptoms: ${report.symptoms}
-
-Time: ${report.createdAt}
-`,
-    });
 
     res.status(201).json({ ok: true, id: report._id });
   } catch (err) {
-    console.error("Error saving report or sending email:", err);
+    console.error("Error saving report:", err);
     res.status(500).json({ ok: false, error: "Failed to process report" });
   }
 });
 
-// 🔓 Public: Get reports (with optional ?since filter)
+// Get reports (with optional ?since filter)
 app.get("/reports", async (req, res) => {
   try {
     const since = req.query.since ? new Date(req.query.since) : null;

@@ -6,13 +6,26 @@ const nodemailer = require("nodemailer");
 
 const app = express();
 
-// Middleware
-app.use(cors({ origin: ["http://localhost:3000"] }));
+// --- CORS Middleware ---
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3000", // Local dev
+      "https://clinick-frontend.vercel.app", // ✅ Vercel frontend
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE"], // Allow needed HTTP methods
+    credentials: true, // Allow cookies/headers if ever needed
+  })
+);
+
 app.use(express.json());
 
 // --- MongoDB connection ---
 mongoose
-  .connect(process.env.MONGODB_URI)
+  .connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
@@ -28,6 +41,7 @@ const reportSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
 const Report = mongoose.model("Report", reportSchema);
 
 // --- Nodemailer Transporter ---
@@ -40,6 +54,7 @@ const transporter = nodemailer.createTransport({
 });
 
 // --- Routes ---
+// Health check
 app.get("/", (_req, res) => {
   res.send("Clinick API is running...");
 });

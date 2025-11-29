@@ -120,10 +120,22 @@ app.post("/report", async (req, res) => {
   }
 });
 
-// 🔹 Get Reports
-app.get("/reports", async (_req, res) => {
+// 🔹 Get Reports (Supports Month + Year Filtering)
+app.get("/reports", async (req, res) => {
   try {
-    const reports = await Report.find().sort({ createdAt: -1 });
+    const { month, year } = req.query;
+
+    let filter = {};
+
+    // If month & year are provided → filter by month
+    if (month && year) {
+      const start = new Date(year, month - 1, 1);
+      const end = new Date(year, month, 1);
+
+      filter.createdAt = { $gte: start, $lt: end };
+    }
+
+    const reports = await Report.find(filter).sort({ createdAt: -1 });
     res.json(reports);
   } catch (err) {
     console.error("Error fetching reports:", err);

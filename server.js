@@ -3,7 +3,6 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const fs = require("fs");
 
 const app = express();
 
@@ -22,14 +21,35 @@ app.use(express.json());
 
 // --- MongoDB ---
 mongoose
-  .connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(process.env.MONGODB_URI)
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
-// --- Mongoose Models ---
+
+// --- Firebase Admin Setup ---
+if (!process.env.FIREBASE_PRIVATE_KEY) {
+  console.error("❌ Missing Firebase PRIVATE KEY in ENV!");
+}
+
+if (!admin.apps.length) {
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        project_id: process.env.FIREBASE_PROJECT_ID,
+        client_email: process.env.FIREBASE_CLIENT_EMAIL,
+        private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+      }),
+    });
+
+    console.log("🔥 Firebase Admin initialized successfully");
+  } catch (err) {
+    console.error("❌ Firebase initialization error:", err);
+  }
+}
+
+
+// --- Models ---
 const reportSchema = new mongoose.Schema(
   {
     role: String,
@@ -42,6 +62,7 @@ const reportSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
 const Report = mongoose.model("Report", reportSchema);
 
 const tokenSchema = new mongoose.Schema({
@@ -50,29 +71,20 @@ const tokenSchema = new mongoose.Schema({
 });
 const Token = mongoose.model("Token", tokenSchema);
 
-// --- Firebase Admin Setup ---
-const serviceAccountPath = "./serviceAccountKey.json"; // make sure this file exists
-if (fs.existsSync(serviceAccountPath)) {
-  admin.initializeApp({
-    credential: admin.credential.cert(require(serviceAccountPath)),
-  });
-  console.log("🔥 Firebase Admin initialized");
-} else {
-  console.error("❌ Missing serviceAccountKey.json!");
-}
 
 // --- ROUTES ---
 
-// Health check
 app.get("/", (_req, res) => res.send("Clinick API is running..."));
 
-// 🔹 Save FCM Token
+// Save FCM token
 app.post("/save-token", async (req, res) => {
   try {
     const { token } = req.body;
+
     if (!token) return res.status(400).json({ ok: false, error: "Missing token" });
 
     const exists = await Token.findOne({ token });
+
     if (!exists) {
       await Token.create({ token });
       console.log("✅ Token saved:", token);
@@ -87,7 +99,8 @@ app.post("/save-token", async (req, res) => {
   }
 });
 
-// 🔹 Submit Report + Notify Devices
+
+// Submit report + Send notification
 app.post("/report", async (req, res) => {
   try {
     const report = await Report.create({
@@ -99,7 +112,8 @@ app.post("/report", async (req, res) => {
       symptoms: req.body.symptoms,
     });
 
-    const tokens = (await Token.find()).map((t) => t.token);
+    const tokens = (await Token.find()).map(t => t.token);
+
     if (tokens.length > 0) {
       const message = {
         notification: {
@@ -109,8 +123,12 @@ app.post("/report", async (req, res) => {
         tokens,
       };
 
-      const response = await admin.messaging().sendMulticast(message);
-      console.log(`📨 Notifications sent: ${response.successCount}/${tokens.length}`);
+      try {
+        const response = await admin.messaging().sendMulticast(message);
+        console.log(`📨 Notifications sent: ${response.successCount}/${tokens.length}`);
+      } catch (err) {
+        console.error("❌ Firebase send error:", err);
+      }
     }
 
     res.status(201).json({ ok: true, id: report._id });
@@ -120,14 +138,14 @@ app.post("/report", async (req, res) => {
   }
 });
 
-// 🔹 Get Reports (Supports Month + Year Filtering)
+
+// Get monthly reports
 app.get("/reports", async (req, res) => {
   try {
     const { month, year } = req.query;
 
     let filter = {};
 
-    // If month & year are provided → filter by month
     if (month && year) {
       const start = new Date(year, month - 1, 1);
       const end = new Date(year, month, 1);
@@ -139,29 +157,33 @@ app.get("/reports", async (req, res) => {
     res.json(reports);
   } catch (err) {
     console.error("Error fetching reports:", err);
-    res.status(500).json({ ok: false, error: "Failed to load reports" });
+    res.status(500).json({ ok: false, error: "Failed" });
   }
 });
 
-// 🔹 Mark Report as Seen
+
+// Mark report as seen
 app.put("/reports/:id/seen", async (req, res) => {
   try {
-    const updated = await Report.findByIdAndUpdate(req.params.id, { seen: true }, { new: true });
+    const updated = await Report.findByIdAndUpdate(
+      req.params.id,
+      { seen: true },
+      { new: true }
+    );
     res.json(updated);
   } catch (err) {
-    console.error("Error marking report as seen:", err);
-    res.status(500).json({ ok: false, error: "Failed to update report" });
+    console.error("Error marking report seen:", err);
+    res.status(500).json({ ok: false, error: "Failed" });
   }
 });
 
-// --- EXPORT REPORTS AS CSV (Monthly) ---
+
+// Export monthly as CSV
 app.get("/export-reports", async (req, res) => {
   try {
     const { month, year } = req.query;
 
-    if (!month || !year) {
-      return res.status(400).send("Missing month or year");
-    }
+    if (!month || !year) return res.status(400).send("Missing month/year");
 
     const start = new Date(year, month - 1, 1);
     const end = new Date(year, month, 1);
@@ -170,21 +192,22 @@ app.get("/export-reports", async (req, res) => {
       createdAt: { $gte: start, $lt: end }
     });
 
-    // Convert to CSV
     let csv = "Role,Patient Name,Location,Incident,Severity,Symptoms,Date\n";
+
     reports.forEach(r => {
       csv += `"${r.role}","${r.patientName}","${r.location}","${r.incident}","${r.severity}","${r.symptoms.replace(/"/g, '""')}","${new Date(r.createdAt).toLocaleString()}"\n`;
     });
 
-    const filename = `clinick-reports-${year}-${month}.csv`;
-
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=clinick-reports-${year}-${month}.csv`
+    );
 
     res.send(csv);
   } catch (err) {
     console.error("Export error:", err);
-    res.status(500).send("Failed to export reports");
+    res.status(500).send("Failed to export");
   }
 });
 
